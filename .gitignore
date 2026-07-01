@@ -1,0 +1,24 @@
+# Dependency directories
+node_modules/
+ggsn-load-calculator/frontend/node_modules/
+ggsn-load-calculator/frontend/dist/
+
+# Python cache & virtual environment
+__pycache__/
+*.pyc
+ggsn-load-calculator/backend/__pycache__/
+ggsn-load-calculator/backend/uploads/
+
+# Local databases
+*.db
+ggsn-load-calculator/backend/*.db
+
+# Editor directories and files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
