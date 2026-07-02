@@ -44,12 +44,18 @@ def init_db():
         CREATE TABLE IF NOT EXISTS table_license (
             node TEXT PRIMARY KEY,
             vendor TEXT,
+            area TEXT,
             lic_bear REAL,
             lic_throughput REAL,
             lic_bear_uctt REAL,
             lic_throughput_vhkt REAL
         )
     """)
+    # Migration: add area column if it does not yet exist (safe on existing DB)
+    try:
+        cursor.execute("ALTER TABLE table_license ADD COLUMN area TEXT DEFAULT ''")
+    except Exception:
+        pass  # Column already exists
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS table_current (
             node TEXT PRIMARY KEY,
@@ -90,18 +96,18 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM table_license")
     if cursor.fetchone()[0] == 0:
         default_nodes = [
-            ("GGPD04", "Huawei", 2500000, 100000, 2750000, 110000),
-            ("GGPD05", "Huawei", 2500000, 100000, 2750000, 110000),
-            ("GGPD06", "Huawei", 3500000, 120000, 3850000, 130000),
-            ("GGPD07", "Huawei", 3500000, 120000, 3850000, 130000),
-            ("GGHL04", "ZTE", 1090909, 45454, 1200000, 50000),
-            ("GGHL05", "ZTE", 1090909, 45454, 1200000, 50000),
-            ("GGHL06", "ZTE", 1090909, 45454, 1200000, 50000),
-            ("GGHL07", "ZTE", 1090909, 45454, 1200000, 50000),
-            ("GGHL11", "Ericsson", 2500000, 100000, 2750000, 110000),
-            ("GGHL12", "Ericsson", 2500000, 100000, 2750000, 110000),
+            ("GGPD04", "Huawei", "KV1", 2500000, 100000, 2750000, 110000),
+            ("GGPD05", "Huawei", "KV1", 2500000, 100000, 2750000, 110000),
+            ("GGPD06", "Huawei", "KV1", 3500000, 120000, 3850000, 130000),
+            ("GGPD07", "Huawei", "KV1", 3500000, 120000, 3850000, 130000),
+            ("GGHL04", "ZTE",   "KV2", 1090909, 45454, 1200000, 50000),
+            ("GGHL05", "ZTE",   "KV2", 1090909, 45454, 1200000, 50000),
+            ("GGHL06", "ZTE",   "KV2", 1090909, 45454, 1200000, 50000),
+            ("GGHL07", "ZTE",   "KV2", 1090909, 45454, 1200000, 50000),
+            ("GGHL11", "Ericsson", "KV3", 2500000, 100000, 2750000, 110000),
+            ("GGHL12", "Ericsson", "KV3", 2500000, 100000, 2750000, 110000),
         ]
-        cursor.executemany("INSERT INTO table_license VALUES (?, ?, ?, ?, ?, ?)", default_nodes)
+        cursor.executemany("INSERT INTO table_license VALUES (?, ?, ?, ?, ?, ?, ?)", default_nodes)
         
         default_current = [
             ("GGPD04", "Huawei", 2333754, 88777.52, 2333754, 1166877, 2000000, 350000),
@@ -182,7 +188,7 @@ def init_db_extended():
     cursor.execute("SELECT COUNT(*) FROM table_schedules")
     if cursor.fetchone()[0] == 0:
         defaults = [
-            ("license", "SELECT node, vendor, lic_bear, lic_throughput, lic_bear_uctt, lic_throughput_vhkt FROM table_license;", "manual", 0, ""),
+            ("license", "SELECT node, vendor, area, lic_bear, lic_throughput, lic_bear_uctt, lic_throughput_vhkt FROM table_license;", "manual", 0, ""),
             ("current", "SELECT node, vendor, bear_su_dung, throughput, bear_total_su_dung, bear_ims, ipv4_internet, ipv4_ims FROM table_current;", "manual", 0, ""),
             ("weight", "SELECT node, vendor, weight, new_weight, on_off FROM table_weight;", "manual", 0, ""),
             ("ims_routing", "SELECT node, vendor, ims_site FROM table_ims_routing;", "manual", 0, ""),

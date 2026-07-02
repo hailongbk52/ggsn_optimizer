@@ -84,9 +84,9 @@ const TABLE_TEMPLATES = {
   license: {
     label: "Bảng License Node",
     description: "Thông tin license của từng GGSN node",
-    columns: ["Node", "Vendor", "License Bear", "License Throughput", "License Bear UCTT (110%)", "License Throughput VHKT"],
-    sqlHint: "SELECT node, vendor, lic_bear, lic_throughput, lic_bear_uctt, lic_throughput_vhkt FROM table_license;",
-    rows: [{ Node: "GGPD04", Vendor: "Huawei", "License Bear": 2500000, "License Throughput": 100000, "License Bear UCTT (110%)": 2750000, "License Throughput VHKT": 110000 }],
+    columns: ["Node", "Vendor", "Area", "License Bear", "License Throughput", "License Bear UCTT (110%)", "License Throughput VHKT"],
+    sqlHint: "SELECT node, vendor, area, lic_bear, lic_throughput, lic_bear_uctt, lic_throughput_vhkt FROM table_license;",
+    rows: [{ Node: "GGPD04", Vendor: "Huawei", Area: "KV1", "License Bear": 2500000, "License Throughput": 100000, "License Bear UCTT (110%)": 2750000, "License Throughput VHKT": 110000 }],
   },
   current: {
     label: "Bảng Tải Hiện Tại",
@@ -193,6 +193,7 @@ export default function App() {
 
   // Dashboard filter
   const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
+  const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
   const [nodeFilterOpen, setNodeFilterOpen] = useState(false);
   const [nodeSearch, setNodeSearch] = useState("");
 
@@ -333,7 +334,7 @@ export default function App() {
         A: { header: "STT", value: index + 1, formula: "", is_formula: false },
         B: { header: "Node", value: nodeName, formula: "", is_formula: false },
         C: { header: "Vendor", value: vendor, formula: "", is_formula: false },
-        D: { header: "Area", value: "KV1", formula: "", is_formula: false },
+        D: { header: "Area", value: String(licMatch?.Area || licMatch?.area || ""), formula: "", is_formula: false },
         E: { header: "License Bear", value: Number(licMatch?.["License Bear"] || licMatch?.lic_bear || 0), formula: "", is_formula: false },
         F: { header: "License Throughput", value: Number(licMatch?.["License Throughput"] || licMatch?.lic_throughput || 0), formula: "", is_formula: false },
         G: { header: "License Bear UCTT", value: g, formula: "", is_formula: false },
@@ -388,6 +389,7 @@ export default function App() {
     const license = nodes.map(nd => ({
       Node: nd.name,
       Vendor: nd.vendor,
+      Area: nd.name.startsWith("GGPD") ? "KV1" : nd.name.startsWith("GGHL0") ? "KV2" : "KV3",
       "License Bear": nd.g / 1.1,
       "License Throughput": nd.h / 1.1,
       "License Bear UCTT (110%)": nd.g,
@@ -662,10 +664,19 @@ export default function App() {
   }
 
   // ── Dashboard data ─────────────────────────────────────────────────────────
+  const allAreas = useMemo(() =>
+    [...new Set(rows.map(r => String((r["D"] as CellInfo)?.value || "")).filter(Boolean))].sort(),
+    [rows]
+  );
+
   const filteredDashRows = useMemo(() => {
-    if (selectedNodes.length === 0) return displayRows;
-    return displayRows.filter(r => selectedNodes.includes(String((r["B"] as CellInfo)?.value || "")));
-  }, [displayRows, selectedNodes]);
+    let result = displayRows;
+    if (selectedAreas.length > 0)
+      result = result.filter(r => selectedAreas.includes(String((r["D"] as CellInfo)?.value || "")));
+    if (selectedNodes.length > 0)
+      result = result.filter(r => selectedNodes.includes(String((r["B"] as CellInfo)?.value || "")));
+    return result;
+  }, [displayRows, selectedNodes, selectedAreas]);
 
   function buildChart(rows: GridRow[], colPairs: { key: string; col: string; color: string }[]) {
     return rows.map(r => {
@@ -1589,6 +1600,53 @@ export default function App() {
                   </div>
                 )}
               </div>
+
+              {/* ── Area filter checkboxes ── */}
+              {allAreas.length > 0 && (
+                <div className="glass-card rounded-2xl px-4 py-3 flex items-center gap-4 flex-wrap">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-violet-400" />
+                    <span className="text-sm font-semibold text-gray-300">Lọc theo Area:</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {allAreas.map(area => {
+                      const isActive = selectedAreas.includes(area);
+                      return (
+                        <label
+                          key={area}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border cursor-pointer text-xs font-semibold transition-all select-none
+                            ${isActive
+                              ? "bg-violet-600/25 border-violet-500/60 text-violet-200"
+                              : "bg-gray-800/60 border-gray-700/60 text-gray-400 hover:border-violet-500/40 hover:text-gray-200"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isActive}
+                            onChange={e =>
+                              setSelectedAreas(prev =>
+                                e.target.checked ? [...prev, area] : prev.filter(a => a !== area)
+                              )
+                            }
+                            className="accent-violet-500 w-3.5 h-3.5"
+                          />
+                          {area}
+                          <span className={`text-[10px] font-normal ${isActive ? "text-violet-400" : "text-gray-600"}`}>
+                            ({rows.filter(r => String((r["D"] as CellInfo)?.value) === area).length})
+                          </span>
+                        </label>
+                      );
+                    })}
+                    {selectedAreas.length > 0 && (
+                      <button
+                        onClick={() => setSelectedAreas([])}
+                        className="px-2.5 py-1.5 rounded-xl border border-gray-700/60 bg-gray-800/40 text-gray-500 hover:text-gray-300 text-xs transition"
+                      >
+                        Bỏ lọc area
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* ── 3 Merged Charts: Before + After side-by-side ── */}
               <div className="space-y-6">
