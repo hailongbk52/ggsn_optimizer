@@ -22,6 +22,8 @@ import {
   Check,
   X,
   SlidersHorizontal,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import {
   BarChart,
@@ -130,9 +132,10 @@ const PCT_COLS = new Set(["O", "P", "W", "X", "AE", "AF", "AG"]);
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("simulation");
+  const [isFullView, setIsFullView] = useState(false);
 
   // Grid data
-  const [fileName, setFileName] = useState("01072026_New_VN_Report_PS_Core_Resource_Tinhlq1.xlsx");
+  const [fileName, setFileName] = useState("Phòng Di động - TT VHKTTC");
   const [headersRow1, setHeadersRow1] = useState<Record<string, string>>(DEFAULT_HEADERS_ROW1);
   const [headers, setHeaders] = useState<Record<string, string>>(DEFAULT_HEADERS);
   const [rows, setRows] = useState<GridRow[]>([]);
@@ -179,6 +182,15 @@ export default function App() {
   const [overloadThreshold, setOverloadThreshold] = useState(90);
   const [sortAsc, setSortAsc] = useState(true);
 
+  // Table zoom and filter states
+  const [zoomScale, setZoomScale] = useState(100);
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+
+  // SQL Scheduler states
+  const [schedules, setSchedules] = useState<any[]>([]);
+  const [scheduleTypes, setScheduleTypes] = useState<Record<string, string>>({});
+  const [scheduleActives, setScheduleActives] = useState<Record<string, boolean>>({});
+
   // Dashboard filter
   const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
   const [nodeFilterOpen, setNodeFilterOpen] = useState(false);
@@ -202,6 +214,46 @@ export default function App() {
     }
   };
 
+  const fetchSchedules = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/get-schedules`);
+      if (res.data.success) {
+        setSchedules(res.data.schedules);
+        const types: Record<string, string> = {};
+        const actives: Record<string, boolean> = {};
+        res.data.schedules.forEach((s: any) => {
+          types[s.table_key] = s.schedule_type;
+          actives[s.table_key] = s.is_active === 1;
+        });
+        setScheduleTypes(types);
+        setScheduleActives(actives);
+      }
+    } catch (err) {
+      console.error("Failed to load SQL schedules", err);
+    }
+  };
+
+  const saveSchedule = async (tableKey: string) => {
+    try {
+      const query = dbQueryMap[tableKey] || TABLE_TEMPLATES[tableKey as keyof typeof TABLE_TEMPLATES].sqlHint;
+      const type = scheduleTypes[tableKey] || "manual";
+      const active = scheduleActives[tableKey] ? 1 : 0;
+      
+      const res = await axios.post(`${API_BASE}/save-schedule`, {
+        table_key: tableKey,
+        query: query,
+        schedule_type: type,
+        is_active: active
+      });
+      if (res.data.success) {
+        alert("Lưu cấu hình lập lịch SQL thành công!");
+        fetchSchedules();
+      }
+    } catch (err) {
+      alert("Lưu lập lịch thất bại: " + String(err));
+    }
+  };
+
   const fetchDbData = async () => {
     setLoading(true);
     try {
@@ -211,6 +263,8 @@ export default function App() {
           license: res.data.license || [],
           current: res.data.current || [],
           weight: res.data.weight || [],
+          ims_routing: res.data.ims_routing || [],
+          hw_site: res.data.hw_site || [],
         };
         setTableInputData(loadedTables);
         rebuildSimulationGrid(loadedTables);
@@ -227,6 +281,7 @@ export default function App() {
 
   useEffect(() => {
     fetchDbData();
+    fetchSchedules();
   }, []);
 
   // Rebuild the main simulation grid (rows) from the 3 tables
@@ -261,7 +316,7 @@ export default function App() {
 
       const vendor = String(licMatch?.Vendor || licMatch?.vendor || curMatch?.Vendor || curMatch?.vendor || wtMatch?.Vendor || wtMatch?.vendor || "Huawei");
       const imsVal = String(imsMatch?.IMS_site || imsMatch?.ims_site || "IMS");
-      const hwVal  = String(hwMatch?.["HW/NFVI Site"] || hwMatch?.hw_nfvi_site || "site");
+      const hwVal = String(hwMatch?.["HW/NFVI Site"] || hwMatch?.hw_nfvi_site || "site");
 
       const g = Number(licMatch?.["License Bear UCTT (110%)"] || licMatch?.lic_bear_uctt || licMatch?.["License Bear UCTT"] || 0);
       const h = Number(licMatch?.["License Throughput VHKT"] || licMatch?.lic_throughput_vhkt || 0);
@@ -420,14 +475,31 @@ export default function App() {
   const displayRows = useMemo(() => {
     const validRows = rows.filter(r => {
       const node = (r["B"] as CellInfo)?.value;
-      return typeof node === "string" && isValidNode(node);
+      if (!(typeof node === "string" && isValidNode(node))) return false;
+      
+      return Object.keys(columnFilters).every(col => {
+        const query = columnFilters[col]?.trim().toLowerCase();
+        if (!query) return true;
+        const cell = r[col] as CellInfo;
+        if (!cell) return false;
+        let valStr = "";
+        const val = cell.value;
+        if (PCT_COLS.has(col) && typeof val === "number") {
+          valStr = `${(val * 100).toFixed(1)}%`;
+        } else if (typeof val === "number") {
+          valStr = val.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        } else {
+          valStr = String(val ?? "");
+        }
+        return valStr.toLowerCase().includes(query);
+      });
     });
     return [...validRows].sort((a, b) => {
       const na = String((a["B"] as CellInfo)?.value || "");
       const nb = String((b["B"] as CellInfo)?.value || "");
       return sortAsc ? na.localeCompare(nb) : nb.localeCompare(na);
     });
-  }, [rows, sortAsc]);
+  }, [rows, sortAsc, columnFilters]);
 
   const allNodeNames = useMemo(() =>
     displayRows.map(r => String((r["B"] as CellInfo)?.value || "")), [displayRows]);
@@ -712,7 +784,7 @@ export default function App() {
     const tmpl = TABLE_TEMPLATES[tableKey as keyof typeof TABLE_TEMPLATES];
     const data = tableInputData[tableKey] || [];
     const status = dbStatuses[tableKey];
-    const [xlStatus, setXlStatus] = React.useState<"idle"|"ok"|"err">("idle");
+    const [xlStatus, setXlStatus] = React.useState<"idle" | "ok" | "err">("idle");
     const [xlMsg, setXlMsg] = React.useState("");
 
     const page = tablePages[tableKey] || 1;
@@ -735,6 +807,21 @@ export default function App() {
           setXlStatus("err");
           setXlMsg("File không có dữ liệu.");
         } else {
+          // Validate structure & predefined columns
+          const firstRow = rawJson[0];
+          const rowKeys = Object.keys(firstRow).map(k => k.trim().toLowerCase());
+          const missingCols = tmpl.columns.filter(col => {
+            const colLower = col.trim().toLowerCase();
+            return !rowKeys.some(rk => rk.includes(colLower) || colLower.includes(rk));
+          });
+          
+          if (missingCols.length > 0) {
+            setXlStatus("err");
+            setXlMsg(`File import sai cấu trúc. Thiếu cột: ${missingCols.join(", ")}`);
+            e.target.value = "";
+            return;
+          }
+
           // Normalize columns, ensure Vendor exists
           const normalized = rawJson.map(row => {
             const nodeKey = Object.keys(row).find(k => k.toLowerCase() === "node");
@@ -775,16 +862,16 @@ export default function App() {
 
         {/* Excel upload for this table */}
         <div className={`relative border border-dashed rounded-2xl p-4 flex flex-col gap-2 transition group cursor-pointer
-          ${ xlStatus === "ok" ? "border-emerald-600/60 bg-emerald-950/10" : xlStatus === "err" ? "border-red-500/40 bg-red-950/10" : "border-gray-700 hover:border-blue-500/60" }`}>
+          ${xlStatus === "ok" ? "border-emerald-600/60 bg-emerald-950/10" : xlStatus === "err" ? "border-red-500/40 bg-red-950/10" : "border-gray-700 hover:border-blue-500/60"}`}>
           <input type="file" accept=".xlsx,.xls" onChange={handleTableExcel}
             className="absolute inset-0 opacity-0 cursor-pointer z-10" />
           <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-xl transition ${ xlStatus === "ok" ? "bg-emerald-600/20" : xlStatus === "err" ? "bg-red-500/10" : "bg-gray-800 group-hover:bg-blue-600/20" }`}>
+            <div className={`p-2.5 rounded-xl transition ${xlStatus === "ok" ? "bg-emerald-600/20" : xlStatus === "err" ? "bg-red-500/10" : "bg-gray-800 group-hover:bg-blue-600/20"}`}>
               {xlStatus === "ok"
                 ? <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                 : xlStatus === "err"
-                ? <AlertTriangle className="w-5 h-5 text-red-400" />
-                : <UploadCloud className="w-5 h-5 text-gray-400 group-hover:text-blue-400 transition" />}
+                  ? <AlertTriangle className="w-5 h-5 text-red-400" />
+                  : <UploadCloud className="w-5 h-5 text-gray-400 group-hover:text-blue-400 transition" />}
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-gray-300">Import từ Excel (.xlsx)</p>
@@ -792,7 +879,7 @@ export default function App() {
             </div>
           </div>
           {xlMsg && (
-            <p className={`text-[10px] font-medium pl-1 ${ xlStatus === "ok" ? "text-emerald-400" : "text-red-400" }`}>{xlMsg}</p>
+            <p className={`text-[10px] font-medium pl-1 ${xlStatus === "ok" ? "text-emerald-400" : "text-red-400"}`}>{xlMsg}</p>
           )}
         </div>
 
@@ -877,7 +964,7 @@ export default function App() {
         })()}
 
         {/* SQL query section */}
-        <div className="space-y-2 border-t border-gray-800 pt-4">
+        <div className="space-y-3 border-t border-gray-800 pt-4">
           <label className="text-[10px] text-gray-500 font-bold uppercase tracking-wider flex items-center gap-1.5">
             <Database className="w-3 h-3" /> Hoặc nhập từ SQL
           </label>
@@ -887,15 +974,60 @@ export default function App() {
             onChange={e => setDbQueryMap(p => ({ ...p, [tableKey]: e.target.value }))}
             className="w-full bg-black/40 border border-gray-800 rounded-xl px-3 py-2 text-xs font-mono text-gray-300 focus:outline-none focus:border-blue-500 resize-none"
           />
-          <div className="flex items-center gap-3">
+          
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-900/25 p-3 rounded-2xl border border-gray-800/40">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => runDbQuery(tableKey)}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+              >
+                <Play className="w-3 h-3" /> Chạy SQL Ngay
+              </button>
+              
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-gray-400 font-semibold">Chu kỳ lập lịch:</span>
+                <select
+                  value={scheduleTypes[tableKey] || "manual"}
+                  onChange={e => setScheduleTypes(p => ({ ...p, [tableKey]: e.target.value }))}
+                  className="bg-black/60 border border-gray-800 rounded-lg px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-blue-500"
+                >
+                  <option value="manual">Chạy tay (Manual)</option>
+                  <option value="5m">Mỗi 5 phút</option>
+                  <option value="30m">Mỗi 30 phút</option>
+                  <option value="1h">Mỗi 1 giờ</option>
+                  <option value="24h">Hàng ngày (24h)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  id={`sched-active-${tableKey}`}
+                  checked={scheduleActives[tableKey] || false}
+                  onChange={e => setScheduleActives(p => ({ ...p, [tableKey]: e.target.checked }))}
+                  className="rounded border-gray-800 text-blue-600 focus:ring-blue-500 bg-black/40"
+                />
+                <label htmlFor={`sched-active-${tableKey}`} className="text-[10px] text-gray-300 font-semibold select-none cursor-pointer">Kích hoạt</label>
+              </div>
+            </div>
+
             <button
-              onClick={() => runDbQuery(tableKey)}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+              onClick={() => saveSchedule(tableKey)}
+              className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-semibold border border-gray-700/60 transition"
             >
-              <Play className="w-3 h-3" /> Chạy SQL
+              Lưu Lập Lịch
             </button>
-            {status === "success" && <span className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Thành công</span>}
-            {status === "error" && <span className="text-xs text-red-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Lỗi</span>}
+          </div>
+
+          {schedules.find(s => s.table_key === tableKey)?.last_run && (
+            <p className="text-[10px] text-gray-500">
+              Lần chạy cuối: {new Date(schedules.find(s => s.table_key === tableKey).last_run).toLocaleString("vi-VN")}
+            </p>
+          )}
+
+          <div className="flex items-center gap-3">
+            {status === "success" && <span className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Chạy thành công</span>}
+            {status === "error" && <span className="text-xs text-red-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Lỗi chạy SQL</span>}
           </div>
         </div>
       </div>
@@ -1067,7 +1199,7 @@ export default function App() {
                   XLSX.utils.book_append_sheet(wb, ws, tableLabels[key] || key);
                 });
 
-                XLSX.writeFile(wb, `Export_GGSN_${new Date().toISOString().slice(0,10)}.xlsx`);
+                XLSX.writeFile(wb, `Export_GGSN_${new Date().toISOString().slice(0, 10)}.xlsx`);
               } catch (err) {
                 alert("Export thất bại: " + String(err));
               }
@@ -1152,7 +1284,20 @@ export default function App() {
               )}
 
               {/* Grid */}
-              <div className="glass-card rounded-3xl p-5 overflow-hidden">
+              {isFullView && (
+                <div
+                  className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+                  onClick={() => setIsFullView(false)}
+                />
+              )}
+              <div
+                onKeyDown={e => { if (e.key === "Escape") setIsFullView(false); }}
+                tabIndex={-1}
+                className={`glass-card rounded-3xl p-5 overflow-hidden outline-none transition-all duration-300
+                  ${isFullView
+                    ? "fixed inset-4 z-50 shadow-2xl shadow-black/80 border border-blue-700/40"
+                    : ""}
+                `}>
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <h3 className="font-bold text-base">Bảng Tính Toán Cân Tải GGSN</h3>
@@ -1163,155 +1308,211 @@ export default function App() {
                       <span className="text-blue-400 ml-1">Xanh dương = top 5 số</span>
                     </p>
                   </div>
-                  <button onClick={() => setSortAsc(v => !v)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl border border-gray-700 transition">
-                    {sortAsc ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                    Node {sortAsc ? "A→Z" : "Z→A"}
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1.5 bg-gray-900/60 p-1.5 rounded-xl border border-gray-800/60 text-[11px] text-gray-400">
+                      <span className="font-semibold px-1">Thu Phóng:</span>
+                      <button
+                        onClick={() => setZoomScale(s => Math.max(75, s - 5))}
+                        className="px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded font-bold"
+                      >
+                        -
+                      </button>
+                      <span className="font-mono text-gray-200 min-w-[35px] text-center">{zoomScale}%</span>
+                      <button
+                        onClick={() => setZoomScale(s => Math.min(150, s + 5))}
+                        className="px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded font-bold"
+                      >
+                        +
+                      </button>
+                      <button
+                        onClick={() => setZoomScale(100)}
+                        className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-gray-200 rounded"
+                      >
+                        Reset
+                      </button>
+                    </div>
+
+                    <button onClick={() => setSortAsc(v => !v)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl border border-gray-700 transition">
+                      {sortAsc ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      Node {sortAsc ? "A→Z" : "Z→A"}
+                    </button>
+
+                    <button
+                      onClick={() => setIsFullView(v => !v)}
+                      title={isFullView ? "Thu nhỏ" : "Phóng to toàn màn hình"}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 hover:text-blue-100 rounded-xl border border-blue-700/50 hover:border-blue-500 transition">
+                      {isFullView ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                      {isFullView ? "Thu nhỏ" : "Toàn màn hình"}
+                    </button>
+                  </div>
                 </div>
 
-<div className="overflow-auto max-h-[600px] border border-gray-800/60 rounded-2xl"
-  onClick={e => { if (!(e.ctrlKey || e.metaKey || e.shiftKey)) setSelectedCells(new Set()); }}>
-  <table className="text-left border-collapse text-xs w-max min-w-full">
-    <thead className="sticky top-0 z-20">
-      {/* Row 1 — group labels */}
-      <tr className="bg-gray-950 border-b border-gray-800/50">
-        <th className="px-3 py-2 text-gray-600 border-r border-gray-800 sticky left-0 z-30 bg-gray-950" colSpan={1}>Dòng</th>
-        {visibleCols.map((col, ci) => {
-          const grp = headersRow1[col] || "";
-          const isSticky = ci < 2;
-          const stickyLeft = ci === 0 ? "left-10" : "left-[calc(2.5rem+110px)]";
-          return (
-            <th key={`g-${col}`}
-              className={`px-2 py-2 text-[10px] font-semibold text-gray-500 text-center border-r border-gray-800 whitespace-nowrap bg-gray-950
+                <div
+                  className={`overflow-auto border border-gray-800/60 rounded-2xl transition-all duration-300 ${isFullView ? "max-h-[calc(100vh-160px)]" : "max-h-[600px]"}`}
+                  onClick={e => { if (!(e.ctrlKey || e.metaKey || e.shiftKey)) setSelectedCells(new Set()); }}>
+                  <table className="text-left border-collapse text-xs w-max min-w-full" style={{ fontSize: `${zoomScale}%` }}>
+                    <thead className="sticky top-0 z-20">
+                      {/* Row 1 — group labels */}
+                      <tr className="bg-gray-950 border-b border-gray-800/50">
+                        <th className="px-3 py-2 text-gray-600 border-r border-gray-800 sticky left-0 z-30 bg-gray-950" colSpan={1}>Dòng</th>
+                        {visibleCols.map((col, ci) => {
+                          const grp = headersRow1[col] || "";
+                          const isSticky = ci < 2;
+                          const stickyLeft = ci === 0 ? "left-10" : "left-[calc(2.5rem+110px)]";
+                          return (
+                            <th key={`g-${col}`}
+                              className={`px-2 py-2 text-[10px] font-semibold text-gray-500 text-center border-r border-gray-800 whitespace-nowrap bg-gray-950
                 ${isSticky ? `sticky ${stickyLeft} z-30` : ""}`}>
-              {ci < 2 ? (ci === 0 ? "Node" : "Vendor") : grp}
-            </th>
-          );
-        })}
-      </tr>
-      {/* Row 2 — field names */}
-      <tr className="bg-gray-900/70 border-b border-gray-800">
-        <th className="px-3 py-2.5 text-gray-400 font-bold border-r border-gray-800 w-10 text-center sticky left-0 z-30 bg-gray-900/95">Dòng</th>
-        {visibleCols.map((col, ci) => {
-          const isSticky = ci < 2;
-          const stickyLeft = ci === 0 ? "left-10" : "left-[calc(2.5rem+110px)]";
-          return (
-            <th key={col}
-              className={`px-2 py-2.5 border-r border-gray-800 whitespace-nowrap bg-gray-900/95
+                              {ci < 2 ? (ci === 0 ? "Node" : "Vendor") : grp}
+                            </th>
+                          );
+                        })}
+                      </tr>
+                      {/* Row 2 — field names */}
+                      <tr className="bg-gray-900/70 border-b border-gray-800">
+                        <th className="px-3 py-2.5 text-gray-400 font-bold border-r border-gray-800 w-10 text-center sticky left-0 z-30 bg-gray-900/95">Dòng</th>
+                        {visibleCols.map((col, ci) => {
+                          const isSticky = ci < 2;
+                          const stickyLeft = ci === 0 ? "left-10" : "left-[calc(2.5rem+110px)]";
+                          return (
+                            <th key={col}
+                              className={`px-2 py-2.5 border-r border-gray-800 whitespace-nowrap bg-gray-900/95
                 ${isSticky ? `sticky ${stickyLeft} z-30` : ""}`}>
-              <div className="text-[10px] text-blue-500/80 font-bold mb-0.5">{col}</div>
-              {editingHeader === col ? (
-                <div className="flex items-center gap-1">
-                  <input autoFocus value={tempHeaderVal} onChange={e => setTempHeaderVal(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") saveHeader(col); if (e.key === "Escape") setEditingHeader(null); }}
-                    className="bg-black/60 border border-blue-500 rounded px-1.5 py-0.5 text-xs w-24 focus:outline-none" />
-                  <button onClick={() => saveHeader(col)} className="text-emerald-400 hover:text-emerald-300"><Check className="w-3 h-3" /></button>
-                  <button onClick={() => setEditingHeader(null)} className="text-gray-500 hover:text-gray-300"><X className="w-3 h-3" /></button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1 group text-gray-300 font-semibold">
-                  <span className="max-w-[120px] truncate">{headers[col]}</span>
-                  <button onClick={() => { setEditingHeader(col); setTempHeaderVal(headers[col]); }}
-                    className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-blue-400 transition ml-1">
-                    <Edit2 className="w-2.5 h-2.5" />
-                  </button>
-                </div>
-              )}
-            </th>
-          );
-        })}
-      </tr>
-    </thead>
-    <tbody>
-      {displayRows.map((row, rowIdx) => {
-        const expPct = ((row["X"] as CellInfo)?.value || 0) * 100;
-        const isOverloaded = expPct > overloadThreshold;
-        const rowKey = String(row.row_num);
-        const isRowSelected = visibleCols.some(c => selectedCells.has(`${rowKey}:${c}`));
-        const isEditing = (col: string) =>
-          editingCell?.rowIdx === rows.findIndex(r => r.row_num === row.row_num) &&
-          editingCell?.colLetter === col;
+                              <div className="text-[10px] text-blue-500/80 font-bold mb-0.5">{col}</div>
+                              {editingHeader === col ? (
+                                <div className="flex items-center gap-1">
+                                  <input autoFocus value={tempHeaderVal} onChange={e => setTempHeaderVal(e.target.value)}
+                                    onKeyDown={e => { if (e.key === "Enter") saveHeader(col); if (e.key === "Escape") setEditingHeader(null); }}
+                                    className="bg-black/60 border border-blue-500 rounded px-1.5 py-0.5 text-xs w-24 focus:outline-none" />
+                                  <button onClick={() => saveHeader(col)} className="text-emerald-400 hover:text-emerald-300"><Check className="w-3 h-3" /></button>
+                                  <button onClick={() => setEditingHeader(null)} className="text-gray-500 hover:text-gray-300"><X className="w-3 h-3" /></button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1 group text-gray-300 font-semibold">
+                                  <span className="max-w-[120px] truncate">{headers[col]}</span>
+                                  <button onClick={() => { setEditingHeader(col); setTempHeaderVal(headers[col]); }}
+                                    className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-blue-400 transition ml-1">
+                                    <Edit2 className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
+                              )}
+                            </th>
+                          );
+                        })}
+                      </tr>
+                      {/* Row 3 — column filters */}
+                      <tr className="bg-gray-900/40 border-b border-gray-800">
+                        <th className="px-2 py-1 border-r border-gray-800 sticky left-0 z-30 bg-gray-950/95">
+                          <span className="sr-only">Lọc</span>
+                        </th>
+                        {visibleCols.map((col, ci) => {
+                          const isSticky = ci < 2;
+                          const stickyLeft = ci === 0 ? "left-10" : "left-[calc(2.5rem+110px)]";
+                          return (
+                            <th key={`f-${col}`}
+                              className={`px-1 py-1 border-r border-gray-800 bg-gray-900/95
+                                ${isSticky ? `sticky ${stickyLeft} z-30` : ""}`}>
+                              <input
+                                value={columnFilters[col] || ""}
+                                onChange={e => setColumnFilters(prev => ({ ...prev, [col]: e.target.value }))}
+                                placeholder="Lọc..."
+                                className="w-full bg-black/40 border border-gray-800/80 rounded px-1.5 py-0.5 text-[10px] text-gray-300 focus:outline-none focus:border-blue-500/60 min-w-[70px]"
+                              />
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {displayRows.map((row, rowIdx) => {
+                        const expPct = ((row["X"] as CellInfo)?.value || 0) * 100;
+                        const isOverloaded = expPct > overloadThreshold;
+                        const rowKey = String(row.row_num);
+                        const isRowSelected = visibleCols.some(c => selectedCells.has(`${rowKey}:${c}`));
+                        const isEditing = (col: string) =>
+                          editingCell?.rowIdx === rows.findIndex(r => r.row_num === row.row_num) &&
+                          editingCell?.colLetter === col;
 
-        return (
-          <tr key={rowIdx}
-            className={`border-b border-gray-800/30 transition
+                        return (
+                          <tr key={rowIdx}
+                            className={`border-b border-gray-800/30 transition
               ${isOverloaded ? "bg-red-950/10" : ""}
               ${isRowSelected ? "bg-blue-950/25" : "hover:bg-gray-800/15"}`}>
-            <td className="px-2 py-1.5 text-center text-gray-600 font-bold bg-gray-950/30 border-r border-gray-800 sticky left-0 z-10">{row.row_num}</td>
-            {visibleCols.map((col, ci) => {
-              const cell = row[col] as CellInfo;
-              if (!cell) return <td key={col} className="px-3 py-1.5 border-r border-gray-800/40 text-gray-700">—</td>;
+                            <td className="px-2 py-1.5 text-center text-gray-600 font-bold bg-gray-950/30 border-r border-gray-800 sticky left-0 z-10">{row.row_num}</td>
+                            {visibleCols.map((col, ci) => {
+                              const cell = row[col] as CellInfo;
+                              if (!cell) return <td key={col} className="px-3 py-1.5 border-r border-gray-800/40 text-gray-700">—</td>;
 
-              const isFormula = cell.is_formula;
-              const val = cell.value;
-              const cellId = `${rowKey}:${col}`;
-              const isCellSelected = selectedCells.has(cellId);
-              const isSticky = ci < 2;
-              const stickyLeft = ci === 0 ? "left-10" : "left-[calc(2.5rem+110px)]";
+                              const isFormula = cell.is_formula;
+                              const val = cell.value;
+                              const cellId = `${rowKey}:${col}`;
+                              const isCellSelected = selectedCells.has(cellId);
+                              const isSticky = ci < 2;
+                              const stickyLeft = ci === 0 ? "left-10" : "left-[calc(2.5rem+110px)]";
 
-              let displayVal: string;
-              if (PCT_COLS.has(col) && typeof val === "number") {
-                displayVal = `${(val * 100).toFixed(1)}%`;
-              } else if (typeof val === "number") {
-                displayVal = val.toLocaleString(undefined, { maximumFractionDigits: 2 });
-              } else {
-                displayVal = String(val ?? "");
-              }
+                              let displayVal: string;
+                              if (PCT_COLS.has(col) && typeof val === "number") {
+                                displayVal = `${(val * 100).toFixed(1)}%`;
+                              } else if (typeof val === "number") {
+                                displayVal = val.toLocaleString(undefined, { maximumFractionDigits: 2 });
+                              } else {
+                                displayVal = String(val ?? "");
+                              }
 
-              const highlight = getCellHighlight(col, val);
+                              const highlight = getCellHighlight(col, val);
 
-              const handleClick = (e: React.MouseEvent) => {
-                e.stopPropagation();
-                if (e.shiftKey && anchorCell) {
-                  // Range select: gather all cells from anchor to current
-                  const anchorRowIdx = displayRows.findIndex(r => String(r.row_num) === anchorCell.rowIdx.toString());
-                  const rMin = Math.min(anchorRowIdx, rowIdx);
-                  const rMax = Math.max(anchorRowIdx, rowIdx);
-                  const cMin = Math.min(visibleCols.indexOf(anchorCell.colLetter), ci);
-                  const cMax = Math.max(visibleCols.indexOf(anchorCell.colLetter), ci);
-                  const newSet = new Set(selectedCells);
-                  for (let ri = rMin; ri <= rMax; ri++) {
-                    for (let ci2 = cMin; ci2 <= cMax; ci2++) {
-                      newSet.add(`${displayRows[ri].row_num}:${visibleCols[ci2]}`);
-                    }
-                  }
-                  setSelectedCells(newSet);
-                } else if (e.ctrlKey || e.metaKey) {
-                  // Toggle individual cell
-                  const newSet = new Set(selectedCells);
-                  if (newSet.has(cellId)) newSet.delete(cellId); else newSet.add(cellId);
-                  setSelectedCells(newSet);
-                  setAnchorCell({ rowIdx: row.row_num, colLetter: col });
-                } else {
-                  // Single click: highlight entire row
-                  const newSet = new Set<string>();
-                  visibleCols.forEach(c => newSet.add(`${rowKey}:${c}`));
-                  setSelectedCells(newSet);
-                  setAnchorCell({ rowIdx: row.row_num, colLetter: col });
-                  handleCellClick(rowIdx, col, cell);
-                }
-              };
+                              const handleClick = (e: React.MouseEvent) => {
+                                e.stopPropagation();
+                                if (e.shiftKey && anchorCell) {
+                                  // Range select: gather all cells from anchor to current
+                                  const anchorRowIdx = displayRows.findIndex(r => String(r.row_num) === anchorCell.rowIdx.toString());
+                                  const rMin = Math.min(anchorRowIdx, rowIdx);
+                                  const rMax = Math.max(anchorRowIdx, rowIdx);
+                                  const cMin = Math.min(visibleCols.indexOf(anchorCell.colLetter), ci);
+                                  const cMax = Math.max(visibleCols.indexOf(anchorCell.colLetter), ci);
+                                  const newSet = new Set(selectedCells);
+                                  for (let ri = rMin; ri <= rMax; ri++) {
+                                    for (let ci2 = cMin; ci2 <= cMax; ci2++) {
+                                      newSet.add(`${displayRows[ri].row_num}:${visibleCols[ci2]}`);
+                                    }
+                                  }
+                                  setSelectedCells(newSet);
+                                } else if (e.ctrlKey || e.metaKey) {
+                                  // Toggle individual cell
+                                  const newSet = new Set(selectedCells);
+                                  if (newSet.has(cellId)) newSet.delete(cellId); else newSet.add(cellId);
+                                  setSelectedCells(newSet);
+                                  setAnchorCell({ rowIdx: row.row_num, colLetter: col });
+                                } else {
+                                  // Single click: highlight entire row
+                                  const newSet = new Set<string>();
+                                  visibleCols.forEach(c => newSet.add(`${rowKey}:${c}`));
+                                  setSelectedCells(newSet);
+                                  setAnchorCell({ rowIdx: row.row_num, colLetter: col });
+                                  handleCellClick(rowIdx, col, cell);
+                                }
+                              };
 
-              return (
-                <td key={col}
-                  onClick={handleClick}
-                  className={`px-3 py-1.5 border-r border-gray-800/40 cursor-pointer select-none transition whitespace-nowrap
+                              return (
+                                <td key={col}
+                                  onClick={handleClick}
+                                  className={`px-3 py-1.5 border-r border-gray-800/40 cursor-pointer select-none transition whitespace-nowrap
                     ${isSticky ? `sticky ${stickyLeft} z-10` : ""}
                     ${isFormula ? "text-emerald-400 font-mono" : "text-gray-200"}
                     ${isCellSelected ? "!bg-blue-600/30 ring-1 ring-inset ring-blue-500/60" : isFormula ? "bg-gray-900/20" : isSticky ? "bg-[#0c1424]/80" : ""}
                     ${highlight}
                     ${isEditing(col) ? "ring-2 ring-blue-500 ring-inset bg-blue-950/30" : ""}`}>
-                  {displayVal}
-                </td>
-              );
-            })}
-          </tr>
-        );
-      })}
-    </tbody>
-  </table>
-</div>
+                                  {displayVal}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
                 <p className="text-[10px] text-gray-600 mt-2 text-right">{displayRows.length} nodes hiển thị</p>
               </div>
             </div>
@@ -1396,10 +1597,10 @@ export default function App() {
                   title="Bear Total sử dụng · Bear sử dụng DK / License Bear UCTT / Total IPv4 (v-internet)"
                   data={bearChartData}
                   bars={[
-                    { key: "Bear Total sử dụng",    color: COLORS.bear,    type: "before" },
-                    { key: "Bear sử dụng DK",       color: COLORS.bearDK,  type: "after"  },
-                    { key: "License Bear UCTT",      color: COLORS.licBear, type: "ref"    },
-                    { key: "Total IPv4 (v-internet)",color: COLORS.ipv4,    type: "ref"    },
+                    { key: "Bear Total sử dụng", color: COLORS.bear, type: "before" },
+                    { key: "Bear sử dụng DK", color: COLORS.bearDK, type: "after" },
+                    { key: "License Bear UCTT", color: COLORS.licBear, type: "ref" },
+                    { key: "Total IPv4 (v-internet)", color: COLORS.ipv4, type: "ref" },
                   ]}
                 />
 
@@ -1408,9 +1609,9 @@ export default function App() {
                   title="Bear IMS · Bearer IMS dự kiến / Total IPv4 (IMS)"
                   data={imsChartData}
                   bars={[
-                    { key: "Bear IMS",            color: COLORS.bearIMS, type: "before" },
-                    { key: "Bearer IMS dự kiến",  color: COLORS.imsdk,   type: "after"  },
-                    { key: "Total IPv4 (IMS)",    color: COLORS.ipv4IMS, type: "ref"    },
+                    { key: "Bear IMS", color: COLORS.bearIMS, type: "before" },
+                    { key: "Bearer IMS dự kiến", color: COLORS.imsdk, type: "after" },
+                    { key: "Total IPv4 (IMS)", color: COLORS.ipv4IMS, type: "ref" },
                   ]}
                 />
 
@@ -1419,9 +1620,9 @@ export default function App() {
                   title="Throughput · Throughput dự kiến / License Throughput VHKT"
                   data={thruChartData}
                   bars={[
-                    { key: "Throughput",              color: COLORS.thru,    type: "before" },
-                    { key: "Throughput dự kiến",      color: COLORS.thruDK,  type: "after"  },
-                    { key: "License Throughput VHKT", color: COLORS.licThru, type: "ref"    },
+                    { key: "Throughput", color: COLORS.thru, type: "before" },
+                    { key: "Throughput dự kiến", color: COLORS.thruDK, type: "after" },
+                    { key: "License Throughput VHKT", color: COLORS.licThru, type: "ref" },
                   ]}
                 />
 
@@ -1438,15 +1639,15 @@ export default function App() {
                         const rows = filteredDashRows.filter(r => {
                           const g = (r["G"] as CellInfo)?.value as number || 1;
                           const before = (r["L"] as CellInfo)?.value as number || 0;
-                          const after  = (r["T"] as CellInfo)?.value as number || 0;
+                          const after = (r["T"] as CellInfo)?.value as number || 0;
                           return g > 0 && ((before / g) * 100 > overloadThreshold || (after / g) * 100 > overloadThreshold);
                         });
                         if (rows.length === 0) return <p className="text-[10px] text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Bình thường</p>;
                         return rows.map((r, i) => {
                           const node = String((r["B"] as CellInfo)?.value || "");
-                          const g    = (r["G"] as CellInfo)?.value as number || 1;
-                          const bef  = g > 0 ? ((r["L"] as CellInfo)?.value as number || 0) / g * 100 : 0;
-                          const aft  = g > 0 ? ((r["T"] as CellInfo)?.value as number || 0) / g * 100 : 0;
+                          const g = (r["G"] as CellInfo)?.value as number || 1;
+                          const bef = g > 0 ? ((r["L"] as CellInfo)?.value as number || 0) / g * 100 : 0;
+                          const aft = g > 0 ? ((r["T"] as CellInfo)?.value as number || 0) / g * 100 : 0;
                           const delta = aft - bef;
                           return (
                             <div key={i} className="flex justify-between items-center text-[10px] bg-gray-900/40 rounded-lg px-2.5 py-1.5">
@@ -1477,9 +1678,9 @@ export default function App() {
                         if (rows.length === 0) return <p className="text-[10px] text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Bình thường</p>;
                         return rows.map((r, i) => {
                           const node = String((r["B"] as CellInfo)?.value || "");
-                          const cap  = (r["I2"] as CellInfo)?.value as number || 1;
-                          const bef  = cap > 0 ? ((r["M"] as CellInfo)?.value as number || 0) / cap * 100 : 0;
-                          const aft  = cap > 0 ? ((r["V"] as CellInfo)?.value as number || 0) / cap * 100 : 0;
+                          const cap = (r["I2"] as CellInfo)?.value as number || 1;
+                          const bef = cap > 0 ? ((r["M"] as CellInfo)?.value as number || 0) / cap * 100 : 0;
+                          const aft = cap > 0 ? ((r["V"] as CellInfo)?.value as number || 0) / cap * 100 : 0;
                           const delta = aft - bef;
                           return (
                             <div key={i} className="flex justify-between items-center text-[10px] bg-gray-900/40 rounded-lg px-2.5 py-1.5">
@@ -1502,7 +1703,7 @@ export default function App() {
                       <p className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider mb-1">Throughput</p>
                       {(() => {
                         const rows = filteredDashRows.filter(r => {
-                          const h   = (r["H"] as CellInfo)?.value as number || 1;
+                          const h = (r["H"] as CellInfo)?.value as number || 1;
                           const bef = (r["N"] as CellInfo)?.value as number || 0;
                           const aft = (r["U"] as CellInfo)?.value as number || 0;
                           return h > 0 && ((bef / h) * 100 > overloadThreshold || (aft / h) * 100 > overloadThreshold);
@@ -1510,9 +1711,9 @@ export default function App() {
                         if (rows.length === 0) return <p className="text-[10px] text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Bình thường</p>;
                         return rows.map((r, i) => {
                           const node = String((r["B"] as CellInfo)?.value || "");
-                          const h    = (r["H"] as CellInfo)?.value as number || 1;
-                          const bef  = h > 0 ? ((r["N"] as CellInfo)?.value as number || 0) / h * 100 : 0;
-                          const aft  = h > 0 ? ((r["U"] as CellInfo)?.value as number || 0) / h * 100 : 0;
+                          const h = (r["H"] as CellInfo)?.value as number || 1;
+                          const bef = h > 0 ? ((r["N"] as CellInfo)?.value as number || 0) / h * 100 : 0;
+                          const aft = h > 0 ? ((r["U"] as CellInfo)?.value as number || 0) / h * 100 : 0;
                           const delta = aft - bef;
                           return (
                             <div key={i} className="flex justify-between items-center text-[10px] bg-gray-900/40 rounded-lg px-2.5 py-1.5">
@@ -1532,9 +1733,9 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+              </div>
             </div>
-          </div>
-        )}
+          )}
         </div>
       </main>
     </div>
