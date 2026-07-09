@@ -239,13 +239,13 @@ async def get_all_data():
     cursor.execute("SELECT * FROM table_hw_site")
     hw_rows = [dict(r) for r in cursor.fetchall()]
     
-    # Translate DB keys back to UI template columns
-    # UI License cols: ["Node", "Vendor", "License Bear", "License Throughput", "License Bear UCTT (110%)", "License Throughput VHKT"]
+    # UI License cols: ["Node", "Vendor", "Area", "License Bear", "License Throughput", "License Bear UCTT (110%)", "License Throughput VHKT"]
     license_ui = []
     for r in license_rows:
         license_ui.append({
             "Node": r["node"],
             "Vendor": r["vendor"] or "Huawei",
+            "Area": r.get("area") or "",
             "License Bear": r["lic_bear"],
             "License Throughput": r["lic_throughput"],
             "License Bear UCTT (110%)": r["lic_bear_uctt"],
@@ -317,11 +317,12 @@ async def save_table_data(req: SaveDataRequest):
                 node = str(r.get("Node") or r.get("node") or "")
                 if not node: continue
                 cursor.execute("""
-                    INSERT OR REPLACE INTO table_license (node, vendor, lic_bear, lic_throughput, lic_bear_uctt, lic_throughput_vhkt)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO table_license (node, vendor, area, lic_bear, lic_throughput, lic_bear_uctt, lic_throughput_vhkt)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     node,
                     r.get("Vendor") or r.get("vendor") or "Huawei",
+                    r.get("Area") or r.get("area") or "",
                     float(r.get("License Bear") or r.get("lic_bear") or 0),
                     float(r.get("License Throughput") or r.get("lic_throughput") or 0),
                     float(r.get("License Bear UCTT (110%)") or r.get("lic_bear_uctt") or 0),
@@ -519,11 +520,12 @@ def execute_and_apply_query(table_key: str, query: str):
                 node = str(r.get("node") or r.get("node_name") or "")
                 if not node: continue
                 cursor.execute("""
-                    INSERT OR REPLACE INTO table_license (node, vendor, lic_bear, lic_throughput, lic_bear_uctt, lic_throughput_vhkt)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO table_license (node, vendor, area, lic_bear, lic_throughput, lic_bear_uctt, lic_throughput_vhkt)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     node,
                     r.get("vendor") or "Huawei",
+                    r.get("area") or "",
                     float(r.get("lic_bear") or r.get("license_bear") or 0),
                     float(r.get("lic_throughput") or r.get("license_throughput") or 0),
                     float(r.get("lic_bear_uctt") or r.get("license_bear_uctt_110") or 0),

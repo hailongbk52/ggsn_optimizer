@@ -194,6 +194,7 @@ export default function App() {
   // Dashboard filter
   const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
   const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
+  const [selectedHwSites, setSelectedHwSites] = useState<string[]>([]);
   const [nodeFilterOpen, setNodeFilterOpen] = useState(false);
   const [nodeSearch, setNodeSearch] = useState("");
 
@@ -573,6 +574,25 @@ export default function App() {
       return s + (typeof v === "number" ? v : 0);
     }, 0);
 
+    // Pre-compute IMS group sums for columns R and S
+    // R = sum of M for all rows sharing the same Q (IMS system name)
+    // S = sum of V for all rows sharing the same Q (IMS system name)
+    // We first do a pass to accumulate per-group sums, then assign
+    const imsSumM: Record<string, number> = {};
+    const imsSumV_pre: Record<string, number> = {};
+    inputRows.forEach(r => {
+      const q = String((r["Q"] as CellInfo)?.value || "");
+      const m = (r["M"] as CellInfo)?.value as number || 0;
+      imsSumM[q] = (imsSumM[q] || 0) + m;
+      // V before recalc: compute delta here to get V_new
+      const ak = (r["AK"] as CellInfo)?.value as number || 0;
+      const ah = (r["AH"] as CellInfo)?.value as number || 0;
+      const aj = ak !== 0 ? 1 : 0;
+      const delta = sumAK > 0 ? (ak / sumAK - ah / sumAH) : 0;
+      const v_new = (m + delta * sumM) * aj;
+      imsSumV_pre[q] = (imsSumV_pre[q] || 0) + v_new;
+    });
+
     return inputRows.map(row => {
       const g = (row["G"] as CellInfo)?.value as number || 1;
       const h = (row["H"] as CellInfo)?.value as number || 1;
@@ -583,6 +603,7 @@ export default function App() {
       const ah = (row["AH"] as CellInfo)?.value as number || 0;
       const aj = ak !== 0 ? 1 : 0;
       const delta = sumAK > 0 ? (ak / sumAK - ah / sumAH) : 0;
+      const q = String((row["Q"] as CellInfo)?.value || "");
 
       const t = (l + delta * sumL) * aj;
       const u = (n + delta * sumN) * aj;
@@ -592,10 +613,15 @@ export default function App() {
       const w2 = g > 0 ? t / g : 0;
       const x = h > 0 ? u / h : 0;
 
+      const rVal = imsSumM[q] ?? m;      // R = ΣM same IMS group (Tải IMS Trước cắt)
+      const sVal = imsSumV_pre[q] ?? v2; // S = ΣV same IMS group (Tải IMS Sau cắt)
+
       return {
         ...row,
         O: { ...(row["O"] as CellInfo), value: o },
         P: { ...(row["P"] as CellInfo), value: p },
+        R: { ...(row["R"] as CellInfo), value: rVal, formula: "=SUMIF(Q:Q,Q,M:M)", is_formula: true },
+        S: { ...(row["S"] as CellInfo), value: sVal, formula: "=SUMIF(Q:Q,Q,V:V)", is_formula: true },
         T: { ...(row["T"] as CellInfo), value: t },
         U: { ...(row["U"] as CellInfo), value: u },
         V: { ...(row["V"] as CellInfo), value: v2 },
@@ -669,14 +695,21 @@ export default function App() {
     [rows]
   );
 
+  const allHwSites = useMemo(() =>
+    [...new Set(rows.map(r => String((r["AM"] as CellInfo)?.value || "")).filter(Boolean))].sort(),
+    [rows]
+  );
+
   const filteredDashRows = useMemo(() => {
     let result = displayRows;
     if (selectedAreas.length > 0)
       result = result.filter(r => selectedAreas.includes(String((r["D"] as CellInfo)?.value || "")));
+    if (selectedHwSites.length > 0)
+      result = result.filter(r => selectedHwSites.includes(String((r["AM"] as CellInfo)?.value || "")));
     if (selectedNodes.length > 0)
       result = result.filter(r => selectedNodes.includes(String((r["B"] as CellInfo)?.value || "")));
     return result;
-  }, [displayRows, selectedNodes, selectedAreas]);
+  }, [displayRows, selectedNodes, selectedAreas, selectedHwSites]);
 
   function buildChart(rows: GridRow[], colPairs: { key: string; col: string; color: string }[]) {
     return rows.map(r => {
@@ -1642,6 +1675,53 @@ export default function App() {
                         className="px-2.5 py-1.5 rounded-xl border border-gray-700/60 bg-gray-800/40 text-gray-500 hover:text-gray-300 text-xs transition"
                       >
                         Bỏ lọc area
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── HW/NFVI Site filter checkboxes ── */}
+              {allHwSites.length > 0 && (
+                <div className="glass-card rounded-2xl px-4 py-3 flex items-center gap-4 flex-wrap">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Filter className="w-3.5 h-3.5 text-cyan-400" />
+                    <span className="text-sm font-semibold text-gray-300">Lọc theo HW/NFVI Site:</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {allHwSites.map(site => {
+                      const isActive = selectedHwSites.includes(site);
+                      return (
+                        <label
+                          key={site}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border cursor-pointer text-xs font-semibold transition-all select-none
+                            ${isActive
+                              ? "bg-cyan-600/20 border-cyan-500/60 text-cyan-200"
+                              : "bg-gray-800/60 border-gray-700/60 text-gray-400 hover:border-cyan-500/40 hover:text-gray-200"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isActive}
+                            onChange={e =>
+                              setSelectedHwSites(prev =>
+                                e.target.checked ? [...prev, site] : prev.filter(s => s !== site)
+                              )
+                            }
+                            className="accent-cyan-500 w-3.5 h-3.5"
+                          />
+                          {site}
+                          <span className={`text-[10px] font-normal ${isActive ? "text-cyan-400" : "text-gray-600"}`}>
+                            ({rows.filter(r => String((r["AM"] as CellInfo)?.value) === site).length})
+                          </span>
+                        </label>
+                      );
+                    })}
+                    {selectedHwSites.length > 0 && (
+                      <button
+                        onClick={() => setSelectedHwSites([])}
+                        className="px-2.5 py-1.5 rounded-xl border border-gray-700/60 bg-gray-800/40 text-gray-500 hover:text-gray-300 text-xs transition"
+                      >
+                        Bỏ lọc site
                       </button>
                     )}
                   </div>
