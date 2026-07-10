@@ -91,6 +91,13 @@ def init_db():
             hw_nfvi_site TEXT
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS table_ims_license (
+            node TEXT PRIMARY KEY,
+            vendor TEXT,
+            license REAL
+        )
+    """)
     
     # Check if empty, insert default initial nodes
     cursor.execute("SELECT COUNT(*) FROM table_license")
@@ -169,6 +176,14 @@ def init_db():
         ]
         cursor.executemany("INSERT INTO table_hw_site VALUES (?, ?, ?)", default_hw)
 
+    cursor.execute("SELECT COUNT(*) FROM table_ims_license")
+    if cursor.fetchone()[0] == 0:
+        default_ims_lic = [
+            ("IMS_HN", "Huawei", 5000000),
+            ("IMS_HCM", "Ericsson", 4000000),
+        ]
+        cursor.executemany("INSERT INTO table_ims_license VALUES (?, ?, ?)", default_ims_lic)
+
     conn.commit()
     conn.close()
 
@@ -192,9 +207,16 @@ def init_db_extended():
             ("current", "SELECT node, vendor, bear_su_dung, throughput, bear_total_su_dung, bear_ims, ipv4_internet, ipv4_ims FROM table_current;", "manual", 0, ""),
             ("weight", "SELECT node, vendor, weight, new_weight, on_off FROM table_weight;", "manual", 0, ""),
             ("ims_routing", "SELECT node, vendor, ims_site FROM table_ims_routing;", "manual", 0, ""),
-            ("hw_site", "SELECT node, vendor, hw_nfvi_site FROM table_hw_site;", "manual", 0, "")
+            ("hw_site", "SELECT node, vendor, hw_nfvi_site FROM table_hw_site;", "manual", 0, ""),
+            ("ims_license", "SELECT node, vendor, license FROM table_ims_license;", "manual", 0, "")
         ]
         cursor.executemany("INSERT INTO table_schedules VALUES (?, ?, ?, ?, ?)", defaults)
+    else:
+        # Ensure ims_license schedule exists for existing DBs (migration)
+        cursor.execute("""
+            INSERT OR IGNORE INTO table_schedules (table_key, query, schedule_type, is_active, last_run)
+            VALUES ('ims_license', 'SELECT node, vendor, license FROM table_ims_license;', 'manual', 0, '')
+        """)
     conn.commit()
     conn.close()
 
@@ -238,6 +260,10 @@ async def get_all_data():
     # Load HW Site
     cursor.execute("SELECT * FROM table_hw_site")
     hw_rows = [dict(r) for r in cursor.fetchall()]
+    
+    # Load IMS License
+    cursor.execute("SELECT * FROM table_ims_license")
+    ims_lic_rows = [dict(r) for r in cursor.fetchall()]
     
     # UI License cols: ["Node", "Vendor", "Area", "License Bear", "License Throughput", "License Bear UCTT (110%)", "License Throughput VHKT"]
     license_ui = []
@@ -294,6 +320,15 @@ async def get_all_data():
             "Vendor": r["vendor"] or "Huawei",
             "HW/NFVI Site": r["hw_nfvi_site"] or "site"
         })
+    
+    # UI IMS License cols: ["Node", "Vendor", "License"]
+    ims_lic_ui = []
+    for r in ims_lic_rows:
+        ims_lic_ui.append({
+            "Node": r["node"],
+            "Vendor": r["vendor"] or "Huawei",
+            "License": r["license"] or 0
+        })
         
     conn.close()
     return {
@@ -302,7 +337,8 @@ async def get_all_data():
         "current": current_ui,
         "weight": weight_ui,
         "ims_routing": ims_ui,
-        "hw_site": hw_ui
+        "hw_site": hw_ui,
+        "ims_license": ims_lic_ui
     }
 
 @app.post("/api/save-table-data")
@@ -386,6 +422,19 @@ async def save_table_data(req: SaveDataRequest):
                     node,
                     r.get("Vendor") or r.get("vendor") or "Huawei",
                     r.get("HW/NFVI Site") or r.get("hw_nfvi_site") or r.get("HW_Site") or "site"
+                ))
+        elif req.table_key == "ims_license":
+            cursor.execute("DELETE FROM table_ims_license")
+            for r in req.rows:
+                node = str(r.get("Node") or r.get("node") or "")
+                if not node: continue
+                cursor.execute("""
+                    INSERT OR REPLACE INTO table_ims_license (node, vendor, license)
+                    VALUES (?, ?, ?)
+                """, (
+                    node,
+                    r.get("Vendor") or r.get("vendor") or "Huawei",
+                    float(r.get("License") or r.get("license") or 0)
                 ))
         
         conn.commit()
@@ -589,6 +638,19 @@ def execute_and_apply_query(table_key: str, query: str):
                     node,
                     r.get("vendor") or "Huawei",
                     r.get("hw_nfvi_site") or r.get("hw_site") or "site"
+                ))
+        elif table_key == "ims_license":
+            cursor.execute("DELETE FROM table_ims_license")
+            for r in db_rows:
+                node = str(r.get("node") or "")
+                if not node: continue
+                cursor.execute("""
+                    INSERT OR REPLACE INTO table_ims_license (node, vendor, license)
+                    VALUES (?, ?, ?)
+                """, (
+                    node,
+                    r.get("vendor") or "Huawei",
+                    float(r.get("license") or 0)
                 ))
         conn.commit()
     except Exception as e:

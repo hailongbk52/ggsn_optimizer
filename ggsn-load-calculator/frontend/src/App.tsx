@@ -59,7 +59,7 @@ const DEFAULT_HEADERS_ROW1: Record<string, string> = {
   E: "License node", F: "License node", G: "License VHKT", H: "License VHKT",
   J: "", K: "",
   L: "", M: "", N: "",
-  O: "Tỷ lệ sử dụng", P: "Tỷ lệ sử dụng", Q: "Tỷ lệ sử dụng",
+  O: "Tỷ lệ sử dụng", P: "Tỷ lệ sử dụng", Q: "Tỷ lệ sử dụng", O2: "Tỷ lệ sử dụng", O3: "Tỷ lệ sử dụng",
   T: "Tải GGSN sau khi cắt chuyển/cân tải", U: "Tải GGSN sau khi cắt chuyển/cân tải", V: "Tải GGSN sau khi cắt chuyển/cân tải",
   W: "Tải GGSN sau khi cắt chuyển/cân tải", X: "Tải GGSN sau khi cắt chuyển/cân tải",
 };
@@ -72,7 +72,7 @@ const DEFAULT_HEADERS: Record<string, string> = {
   J: "Bear sử dụng", K: "Throughput",
   L: "Bear Total sử dụng", M: "Bear IMS", N: "Throughput",
   O: "%Bear", P: "%Throughput", Q: "IMS",
-  R: "Tải IMS Trước cắt", S: "Tải IMS Sau cắt",
+  R: "Tải IMS Trước cắt", O2: "% Tải IMS trước", S: "Tải IMS Sau cắt", O3: "% Tải IMS sau",
   T: "Bear sử dụng", U: "Throughput dự kiến", V: "Bearer IMS dự kiến",
   W: "%Bear", X: "%Throughput",
   AH: "Weight", AJ: "ON/OFF", AK: "NEW WEIGHT", AL: "Change",
@@ -82,7 +82,7 @@ const DEFAULT_HEADERS: Record<string, string> = {
 // ── Table templates for individual input mode ────────────────────────────────
 const TABLE_TEMPLATES = {
   license: {
-    label: "Bảng License Node",
+    label: "Bảng License GGSN",
     description: "Thông tin license của từng GGSN node",
     columns: ["Node", "Vendor", "Area", "License Bear", "License Throughput", "License Bear UCTT (110%)", "License Throughput VHKT"],
     sqlHint: "SELECT node, vendor, area, lic_bear, lic_throughput, lic_bear_uctt, lic_throughput_vhkt FROM table_license;",
@@ -116,6 +116,13 @@ const TABLE_TEMPLATES = {
     sqlHint: "SELECT node, vendor, hw_nfvi_site FROM table_hw_site;",
     rows: [{ Node: "GGPD04", Vendor: "Huawei", "HW/NFVI Site": "site" }],
   },
+  ims_license: {
+    label: "Bảng License IMS",
+    description: "License IMS cho từng hệ thống IMS → dùng để tính % Tải IMS. Mặc định: 5000000",
+    columns: ["Node", "Vendor", "License"],
+    sqlHint: "SELECT node, vendor, license FROM table_ims_license;",
+    rows: [{ Node: "IMS_HN", Vendor: "Huawei", License: 5000000 }],
+  },
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -129,6 +136,7 @@ function numFmt(v: any) {
 }
 
 const PCT_COLS = new Set(["O", "P", "W", "X", "AE", "AF", "AG"]);
+const IMS_PCT_COLS = new Set(["O2", "O3"]);
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("simulation");
@@ -163,9 +171,9 @@ export default function App() {
 
   // Submenu and Pagination State
   const [sourcesExpanded, setSourcesExpanded] = useState(true);
-  const [currentSourceTab, setCurrentSourceTab] = useState<"license" | "current" | "weight" | "ims_routing" | "hw_site">("license");
+  const [currentSourceTab, setCurrentSourceTab] = useState<"license" | "current" | "weight" | "ims_routing" | "hw_site" | "ims_license">("license");
   const [tablePages, setTablePages] = useState<Record<string, number>>({
-    license: 1, current: 1, weight: 1, ims_routing: 1, hw_site: 1
+    license: 1, current: 1, weight: 1, ims_routing: 1, hw_site: 1, ims_license: 1
   });
   const [tablePageSize, setTablePageSize] = useState(25);
 
@@ -267,6 +275,7 @@ export default function App() {
           weight: res.data.weight || [],
           ims_routing: res.data.ims_routing || [],
           hw_site: res.data.hw_site || [],
+          ims_license: res.data.ims_license || [],
         };
         setTableInputData(loadedTables);
         rebuildSimulationGrid(loadedTables);
@@ -320,6 +329,10 @@ export default function App() {
       const imsVal = String(imsMatch?.IMS_site || imsMatch?.ims_site || "IMS");
       const hwVal = String(hwMatch?.["HW/NFVI Site"] || hwMatch?.hw_nfvi_site || "site");
 
+      // Find IMS license for this node's IMS system
+      const imsLicMatch = currentTables.ims_license?.find((r: any) => String(r.Node || r.node || "").trim().toUpperCase() === imsVal.trim().toUpperCase());
+      const imsLicVal = Number(imsLicMatch?.License || imsLicMatch?.license || 0);
+
       const g = Number(licMatch?.["License Bear UCTT (110%)"] || licMatch?.lic_bear_uctt || licMatch?.["License Bear UCTT"] || 0);
       const h = Number(licMatch?.["License Throughput VHKT"] || licMatch?.lic_throughput_vhkt || 0);
       const l = Number(curMatch?.["Bear Total sử dụng"] || curMatch?.bear_total_su_dung || curMatch?.bear_total || 0);
@@ -351,7 +364,9 @@ export default function App() {
         P: { header: "%Throughput", value: h > 0 ? n / h : 0, formula: "=N/H", is_formula: true },
         Q: { header: "IMS", value: imsVal, formula: "", is_formula: false },
         R: { header: "Tải IMS Trước cắt", value: m, formula: "", is_formula: false },
+        O2: { header: "% Tải IMS trước", value: imsLicVal > 0 ? m / imsLicVal : 0, formula: "=R/IMS_LIC", is_formula: true },
         S: { header: "Tải IMS Sau cắt", value: m, formula: "", is_formula: false },
+        O3: { header: "% Tải IMS sau", value: imsLicVal > 0 ? m / imsLicVal : 0, formula: "=S/IMS_LIC", is_formula: true },
         T: { header: "Bear sử dụng DK", value: l, formula: "=(L+(AK/ΣAKAK-AH/ΣAHAH)*ΣL)*AJ", is_formula: true },
         U: { header: "Throughput dự kiến", value: n, formula: "=(N+(AK/ΣAKAK-AH/ΣAHAH)*ΣN)*AJ", is_formula: true },
         V: { header: "Bearer IMS dự kiến", value: m, formula: "=M+(AK/ΣAKAK-AH/ΣAHAH)*ΣM", is_formula: true },
@@ -363,6 +378,7 @@ export default function App() {
         AL: { header: "Change", value: ah === ak ? "NO" : "YES", formula: "=IF(AH=AK,NO,YES)", is_formula: true },
         AM: { header: "HW/NFVI Site", value: hwVal, formula: "", is_formula: false },
         AN: { header: "Tăng/giảm", value: 0, formula: "=U-N", is_formula: true },
+        _imsLic: imsLicVal,
       };
     });
 
@@ -416,7 +432,10 @@ export default function App() {
       "ON/OFF": 1
     }));
 
-    const mockedTables = { license, current, weight };
+    const mockedTables = { license, current, weight, ims_license: [
+      { Node: "IMS_HN", Vendor: "Huawei", License: 5000000 },
+      { Node: "IMS_HCM", Vendor: "Ericsson", License: 4000000 },
+    ]};
     setTableInputData(mockedTables);
     rebuildSimulationGrid(mockedTables);
 
@@ -456,7 +475,9 @@ export default function App() {
         P: { header: "%Throughput", value: p, formula: "=N/H", is_formula: true },
         Q: { header: "IMS", value: "IMS_HN", formula: "", is_formula: false },
         R: { header: "Tải IMS Trước cắt", value: m, formula: "", is_formula: false },
+        O2: { header: "% Tải IMS trước", value: 5000000 > 0 ? m / 5000000 : 0, formula: "=R/IMS_LIC", is_formula: true },
         S: { header: "Tải IMS Sau cắt", value: v, formula: "", is_formula: false },
+        O3: { header: "% Tải IMS sau", value: 5000000 > 0 ? v / 5000000 : 0, formula: "=S/IMS_LIC", is_formula: true },
         T: { header: "Bear sử dụng DK", value: t, formula: "=(L+(AK/ΣAKAK-AH/ΣAHAH)*ΣL)*AJ", is_formula: true },
         U: { header: "Throughput dự kiến", value: u, formula: "=(N+(AK/ΣAKAK-AH/ΣAHAH)*ΣN)*AJ", is_formula: true },
         V: { header: "Bearer IMS dự kiến", value: v, formula: "=M+(AK/ΣAKAK-AH/ΣAHAH)*ΣM", is_formula: true },
@@ -468,6 +489,7 @@ export default function App() {
         AL: { header: "Change", value: nd.ah === nd.ak ? "NO" : "YES", formula: "=IF(AH=AK,NO,YES)", is_formula: true },
         AM: { header: "HW/NFVI Site", value: "HNI", formula: "", is_formula: false },
         AN: { header: "Tăng/giảm", value: u - nd.n, formula: "=U-N", is_formula: true },
+        _imsLic: 5000000,
       };
     });
 
@@ -519,7 +541,7 @@ export default function App() {
 
       if (values.length === 0) return;
 
-      if (PCT_COLS.has(col)) {
+      if (PCT_COLS.has(col) || IMS_PCT_COLS.has(col)) {
         const overThresh = values.filter(v => v * 100 > overloadThreshold);
         if (overThresh.length > 0) {
           stats[col] = { topSet: new Set(overThresh), overThreshold: true };
@@ -542,7 +564,7 @@ export default function App() {
     const stat = colStats[col];
     if (!stat) return "";
 
-    if (PCT_COLS.has(col)) {
+    if (PCT_COLS.has(col) || IMS_PCT_COLS.has(col)) {
       if (stat.overThreshold && value * 100 > overloadThreshold) return "bg-red-500/20 text-red-300 font-bold";
       if (!stat.overThreshold && stat.topSet.has(value)) return "bg-amber-500/20 text-amber-300 font-bold";
     } else {
@@ -616,12 +638,20 @@ export default function App() {
       const rVal = imsSumM[q] ?? m;      // R = ΣM same IMS group (Tải IMS Trước cắt)
       const sVal = imsSumV_pre[q] ?? v2; // S = ΣV same IMS group (Tải IMS Sau cắt)
 
+      // IMS License for this row's IMS group
+      const imsLic = (row as any)._imsLic as number || 0;
+      // Recalculate IMS license based on IMS group (find from tableInputData)
+      const o2Val = imsLic > 0 ? rVal / imsLic : 0;
+      const o3Val = imsLic > 0 ? sVal / imsLic : 0;
+
       return {
         ...row,
         O: { ...(row["O"] as CellInfo), value: o },
         P: { ...(row["P"] as CellInfo), value: p },
         R: { ...(row["R"] as CellInfo), value: rVal, formula: "=SUMIF(Q:Q,Q,M:M)", is_formula: true },
+        O2: { ...(row["O2"] as CellInfo), value: o2Val, formula: "=R/IMS_LIC", is_formula: true },
         S: { ...(row["S"] as CellInfo), value: sVal, formula: "=SUMIF(Q:Q,Q,V:V)", is_formula: true },
+        O3: { ...(row["O3"] as CellInfo), value: o3Val, formula: "=S/IMS_LIC", is_formula: true },
         T: { ...(row["T"] as CellInfo), value: t },
         U: { ...(row["U"] as CellInfo), value: u },
         V: { ...(row["V"] as CellInfo), value: v2 },
@@ -761,6 +791,27 @@ export default function App() {
       "License Throughput VHKT": (r["H"] as CellInfo)?.value ?? 0,
     };
   });
+
+  // Chart 4: % Tải IMS / License - group by unique IMS systems (Q values)
+  const imsPctChartData = useMemo(() => {
+    // Group filtered rows by IMS system (Q), take the first O2/O3 per group (they're same for same IMS group)
+    const imsGroups: Record<string, { o2: number; o3: number }> = {};
+    filteredDashRows.forEach(r => {
+      const imsGroup = String((r["Q"] as CellInfo)?.value || "");
+      if (!imsGroup) return;
+      if (!imsGroups[imsGroup]) {
+        imsGroups[imsGroup] = {
+          o2: Number((r["O2"] as CellInfo)?.value || 0),
+          o3: Number((r["O3"] as CellInfo)?.value || 0),
+        };
+      }
+    });
+    return Object.entries(imsGroups).map(([name, vals]) => ({
+      name,
+      "% Tải IMS trước": vals.o2,
+      "% Tải IMS sau": vals.o3,
+    }));
+  }, [filteredDashRows]);
 
   const tooltipStyle = { backgroundColor: "#0f172a", borderColor: "#1e293b", borderRadius: 12 };
 
@@ -1130,11 +1181,12 @@ export default function App() {
               {sourcesExpanded && (
                 <div className="mt-1 ml-4 pl-2 border-l border-gray-800 space-y-1">
                   {[
-                    { key: "license", label: "Bảng License Node" },
+                    { key: "license", label: "Bảng License GGSN" },
                     { key: "current", label: "Bảng Tải Hiện Tại" },
                     { key: "weight", label: "Bảng Trọng Số Cân Tải" },
                     { key: "ims_routing", label: "Bảng IMS Routing" },
                     { key: "hw_site", label: "Bảng HW/NFVI Site" },
+                    { key: "ims_license", label: "Bảng License IMS" },
                   ].map(sub => (
                     <button
                       key={sub.key}
@@ -1496,7 +1548,7 @@ export default function App() {
                               const stickyLeft = ci === 0 ? "left-10" : "left-[calc(2.5rem+110px)]";
 
                               let displayVal: string;
-                              if (PCT_COLS.has(col) && typeof val === "number") {
+                              if ((PCT_COLS.has(col) || IMS_PCT_COLS.has(col)) && typeof val === "number") {
                                 displayVal = `${(val * 100).toFixed(1)}%`;
                               } else if (typeof val === "number") {
                                 displayVal = val.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -1763,6 +1815,47 @@ export default function App() {
                     { key: "License Throughput VHKT", color: COLORS.licThru, type: "ref" },
                   ]}
                 />
+
+                {/* Chart 4: % Tải IMS / License */}
+                <div className="glass-card rounded-3xl p-5">
+                  <div className="flex items-start justify-between mb-3 gap-4">
+                    <h4 className="text-sm font-bold text-gray-300">% Tải IMS / License: % Tải IMS trước và % Tải IMS sau</h4>
+                    <div className="flex items-center gap-3 shrink-0 text-[10px] text-gray-500">
+                      <span className="flex items-center gap-1">
+                        <span className="inline-block w-3 h-2 rounded-sm" style={{ background: "#f97316" }} />
+                        % Tải IMS trước
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="inline-block w-3 h-2 rounded-sm opacity-75" style={{ background: "#a78bfa" }} />
+                        % Tải IMS sau
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="inline-block w-3 h-2 rounded-sm" style={{ background: "#ef4444" }} />
+                        Ngưỡng ({overloadThreshold}%)
+                      </span>
+                    </div>
+                  </div>
+                  <div className="h-[420px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={imsPctChartData} margin={{ top: 5, right: 20, left: 10, bottom: 70 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="name" stroke="#6b7280" tick={{ fontSize: 11 }} angle={-35} textAnchor="end" interval={0} />
+                        <YAxis stroke="#6b7280" tick={{ fontSize: 10 }} tickFormatter={v => `${(v * 100).toFixed(0)}%`} domain={[0, 'auto']} />
+                        <Tooltip
+                          contentStyle={tooltipStyle}
+                          formatter={(value: any, name: any) => [
+                            `${(Number(value) * 100).toFixed(1)}%`,
+                            name
+                          ]}
+                        />
+                        <Legend wrapperStyle={{ paddingTop: "14px", fontSize: "11px" }} />
+                        <ReferenceLine y={overloadThreshold / 100} stroke="#ef4444" strokeDasharray="5 3" strokeWidth={1.5} label={{ value: `${overloadThreshold}%`, fill: "#ef4444", fontSize: 10, position: "insideTopRight" }} />
+                        <Bar dataKey="% Tải IMS trước" fill="#f97316" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="% Tải IMS sau" fill="#a78bfa" radius={[3, 3, 0, 0]} fillOpacity={0.8} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
 
                 {/* Alert summary table */}
                 <div className="glass-card rounded-2xl p-5">

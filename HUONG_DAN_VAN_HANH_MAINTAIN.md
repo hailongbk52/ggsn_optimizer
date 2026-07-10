@@ -145,21 +145,26 @@ Không chạy `npm run dev` trên môi trường Production. Phải build code t
 
 ## 4. Cập Nhật Dữ Liệu Bảng & Cơ Sở Dữ Liệu
 
-Hệ thống lưu trữ 5 bảng cấu hình quan trọng trong SQLite:
-1.  `table_license`: Thông số license (License Bear, License Throughput, License Bear UCTT, License Throughput VHKT).
+Hệ thống lưu trữ 6 bảng cấu hình quan trọng trong SQLite:
+1.  `table_license`: Thông số license GGSN (License Bear, License Throughput, License Bear UCTT, License Throughput VHKT).
 2.  `table_current`: Số liệu tải thực tế hiện tại (Bear sử dụng, Throughput, Bear IMS, IPv4 Internet, IPv4 IMS...).
 3.  `table_weight`: Trọng số định tuyến (Weight cũ, Weight mới và trạng thái ON/OFF của node).
 4.  `table_ims_routing`: Cấu hình mapping IMS Site cho từng GGSN node (phục vụ cột IMS (Q) trong bảng mô phỏng).
 5.  `table_hw_site`: Cấu hình mapping vị trí phần cứng HW/NFVI Site cho từng node (phục vụ cột HW/NFVI Site (AM)).
+6.  `table_ims_license`: Cấu hình dung lượng License IMS của từng hệ thống IMS (phục vụ việc tính toán tỷ lệ sử dụng IMS trước/sau).
 
 ### 4.1. Cập nhật qua giao diện người dùng (UI)
-*   Hệ thống có mục chỉnh sửa trực tiếp trên lưới dữ liệu (editable tables) cho cả 5 bảng trên. Sau khi thay đổi thông số, ấn nút **"Lưu dữ liệu"** để hệ thống gọi API `save-table-data` lưu thẳng vào SQLite.
-*   **Truy vấn SQL trực tiếp**: Hệ thống cung cấp một bảng điều khiển SQL Query trên giao diện để quản trị viên có thể chạy lệnh `UPDATE`, `INSERT`, `DELETE` thủ công trên cả 5 bảng.
+*   Hệ thống có mục chỉnh sửa trực tiếp trên lưới dữ liệu (editable tables) cho cả 6 bảng trên. Sau khi thay đổi thông số, ấn nút **"Lưu dữ liệu"** để hệ thống gọi API `save-table-data` lưu thẳng vào SQLite.
+*   **Truy vấn SQL trực tiếp**: Hệ thống cung cấp một bảng điều khiển SQL Query trên giao diện để quản trị viên có thể chạy lệnh `UPDATE`, `INSERT`, `DELETE` thủ công trên cả 6 bảng.
+*   **Cột tính toán tải IMS mới**:
+    *   `% Tải IMS trước`: Tính bằng cách lấy giá trị cột `Tải IMS Trước cắt (R)` chia cho `License` tương ứng trong bảng `table_ims_license` dựa trên hệ thống IMS tại cột `IMS (Q)`.
+    *   `% Tải IMS sau`: Tính bằng cách lấy giá trị cột `Tải IMS Sau cắt (S)` chia cho `License` tương ứng trong bảng `table_ims_license` dựa trên hệ thống IMS tại cột `IMS (Q)`.
+    *   Hệ thống tự động highlight màu đỏ đối với các giá trị tỷ lệ sử dụng IMS vượt quá ngưỡng quá tải cấu hình.
 
 ### 4.2. Khởi tạo/Cập nhật cơ sở dữ liệu vật lý
 *   **File database**: `backend/ggsn_persistent_store.db`.
 *   **Sao lưu (Backup)**: Chỉ cần copy file `.db` này cất vào thư mục lưu trữ an toàn định kỳ.
-*   **Thay đổi dữ liệu mặc định**: Nếu cần thay đổi cấu trúc bảng hoặc danh sách node GGSN mặc định ban đầu, chỉnh sửa hàm `init_db()` trong file [backend/main.py](file:///c:/Users/longvh3/Downloads/Tinh_tai_UCTT/ggsn-load-calculator/backend/main.py).
+*   **Thay đổi dữ liệu mặc định**: Nếu cần thay đổi cấu trúc bảng hoặc danh sách node GGSN/IMS mặc định ban đầu, chỉnh sửa hàm `init_db()` trong file [backend/main.py](file:///c:/Users/longvh3/Downloads/Tinh_tai_UCTT/ggsn-load-calculator/backend/main.py).
 
 ### 4.3. Quản lý Lập lịch SQL Định kỳ (Scheduler)
 Hệ thống sử dụng bảng `table_schedules` để lưu trữ các tác vụ chạy SQL tự động cập nhật dữ liệu nguồn:
